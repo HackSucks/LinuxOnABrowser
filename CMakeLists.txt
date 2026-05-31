@@ -3,7 +3,6 @@ project(temu C)
 
 set(CMAKE_C_STANDARD 11)
 
-# Download info
 set(URL "https://cloud.tsinghua.edu.cn/f/b639b1cc87784504aab4/?dl=1")
 set(DOWNLOAD_DIR "${CMAKE_BINARY_DIR}/linux")
 set(FILE_NAME "binary.zip")
@@ -33,7 +32,8 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Werror -g")
 
 include_directories(include)
 
-add_executable(temu src/main.c
+set(TEMU_SOURCES
+        src/main.c
         src/mmu.c
         src/machine.c
         src/decode.c
@@ -65,52 +65,38 @@ add_executable(temu src/main.c
         src/port/os_yield_cpu.c
         include/port/os_yield_cpu.h)
 
-add_library(temudifftest SHARED src/main.c
-        src/mmu.c
-        src/machine.c
-        src/decode.c
-        src/zicsr.c
-        include/zicsr.h
-        src/trap.c
-        include/trap.h
-        include/uart8250.h
-        src/peripherals/uart8250.c
-        src/peripherals/plic-simple.c
-        include/plic-simple.h
-        src/port/lock.c
-        include/port/lock.h
-        src/port/load_binary.c
-        include/port/load_binary.h
-        src/port/console.c
-        include/port/console.h
-        include/perf.h
-        include/port/main_memory.h
-        src/port/main_memory.c
-        src/tlb.c
-        include/tlb.h
-        src/cache.c
-        include/cache.h
-        src/port/system_timer.c
-        include/port/system_timer.h
-        src/port/port_main.c
-        include/port/port_main.h
-        src/port/os_yield_cpu.c
-        include/port/os_yield_cpu.h)
+add_executable(temu ${TEMU_SOURCES})
+add_library(temudifftest STATIC ${TEMU_SOURCES})
 
-set(THREADS_PREFER_PTHREAD_FLAG ON)
-find_package(Threads REQUIRED)
-target_link_libraries(temu PRIVATE Threads::Threads)
+if (EMSCRIPTEN)
+    message(STATUS "Emscripten build: applying WASM settings")
 
-if (PerformanceMode)
-    include(CheckIPOSupported)
-    check_ipo_supported(RESULT supportLto OUTPUT output)
-    if (supportLto)
-        set_property(TARGET temu PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-    else ()
-        message(WARNING "IPO is not supported: ${output}")
+    # Output as index.js/index.wasm/index.data so the web server serves the
+    # right files without renaming anything manually after each build.
+    set_target_properties(temu PROPERTIES OUTPUT_NAME "index")
+
+    set(EMSCRIPTEN_LINK_FLAGS
+        "SHELL:-s WASM=1"
+        "SHELL:-s INITIAL_MEMORY=268435456"
+        "SHELL:-s ALLOW_MEMORY_GROWTH=1"
+        "SHELL:-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap']"
+        -Wno-limited-postlink-optimizations
+    )
+
+    target_link_options(temu         PRIVATE ${EMSCRIPTEN_LINK_FLAGS})
+    target_link_options(temudifftest PRIVATE ${EMSCRIPTEN_LINK_FLAGS})
+
+else ()
+    if (PerformanceMode)
+        include(CheckIPOSupported)
+        check_ipo_supported(RESULT supportLto OUTPUT output)
+        if (supportLto)
+            set_property(TARGET temu PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+        else ()
+            message(WARNING "IPO is not supported: ${output}")
+        endif ()
     endif ()
 endif ()
-
 
 add_custom_command(
     OUTPUT ${DOWNLOAD_DIR}/u-boot.bin
@@ -131,6 +117,4 @@ add_custom_target(temurun
     COMMENT "Running temu with specific arguments"
 )
 
-add_custom_target(runlinux
-    DEPENDS temurun
-)
+add_custom_target(runlinux DEPENDS temurun)

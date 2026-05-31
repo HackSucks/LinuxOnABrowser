@@ -9,6 +9,10 @@
 #include "port/os_yield_cpu.h"
 #include "zicsr.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 uint8_t current_privilege = CSR_MASK_MACHINE;
 
 static uint64_t cycle = 0;
@@ -88,10 +92,11 @@ const uint8_t csr_index_remap[0x10] = {
         [0xF] = CSR_idx_mvendorid,
 };
 
+#ifndef __EMSCRIPTEN__
 static uint64_t zicnt_csr_conv_host(uint64_t time_elapsed) {
     return ((ZICNT_TIMER_FREQ / PORT_CLOCKS_PER_SEC) * (time_elapsed));
 }
-
+#endif
 static uint64_t zicnt_csr_conv_emu(uint64_t ticks_elapsed) {
     return ticks_elapsed / (ZICNT_TIMER_FREQ / 1000000);
 }
@@ -110,7 +115,6 @@ static uint8_t csr_get_index_by_number(uint16_t csr_number) {
 }
 
 static uint32_t csr_read(uint16_t csr_index, uint8_t *exception) {
-    /* TODO: implement read actions */
     if ((csr_match[csr_index] & 0x03) <= current_privilege) {
         *exception = 0;
         return control_status_registers[csr_index];
@@ -120,12 +124,10 @@ static uint32_t csr_read(uint16_t csr_index, uint8_t *exception) {
 }
 
 static void csr_write(uint16_t csr_index, uint32_t value, uint8_t *exception) {
-    /* TODO: implement write actions */
     if (likely(csr_match[csr_index] & CSR_MASK_WRITE && ((csr_match[csr_index] & 0x03) <= current_privilege))) {
         *exception = 0;
         control_status_registers[csr_index] = value;
         if (csr_index == CSR_idx_satp) {
-            /* 目前还没有支持ASID，所以在每次写SATP后需要手动flush TLB */
             tlb_flushall();
         }
     } else {
@@ -136,44 +138,28 @@ static void csr_write(uint16_t csr_index, uint32_t value, uint8_t *exception) {
 void csr_csrrw(uint8_t rs1, uint8_t rd, uint16_t csr_number, uint8_t *intr) {
     uint8_t index = csr_get_index_by_number(csr_number);
     *intr = 0;
-    if (index == (uint8_t) -1) {
-        *intr = 1;
-        return;
-    }
+    if (index == (uint8_t) -1) { *intr = 1; return; }
     if (rd) {
         uint32_t prev_value = csr_read(index, intr);
-        if (unlikely(*intr)) {
-            return;
-        }
+        if (unlikely(*intr)) return;
         csr_write(index, mmu_register_read(rs1), intr);
-        if (unlikely(*intr)) {
-            return;
-        }
+        if (unlikely(*intr)) return;
         mmu_register_write(rd, prev_value);
     } else {
         csr_write(index, mmu_register_read(rs1), intr);
-        if (unlikely(*intr)) {
-            return;
-        }
+        if (unlikely(*intr)) return;
     }
 }
 
 void csr_csrrs(uint8_t rs1, uint8_t rd, uint16_t csr_number, uint8_t *intr) {
     uint8_t index = csr_get_index_by_number(csr_number);
     *intr = 0;
-    if (index == (uint8_t) -1) {
-        *intr = 1;
-        return;
-    }
+    if (index == (uint8_t) -1) { *intr = 1; return; }
     uint32_t prev_value = csr_read(index, intr);
-    if (*intr) {
-        return;
-    }
+    if (*intr) return;
     if (rs1) {
         csr_write(index, prev_value | mmu_register_read(rs1), intr);
-        if (unlikely(*intr)) {
-            return;
-        }
+        if (unlikely(*intr)) return;
     }
     mmu_register_write(rd, prev_value);
 }
@@ -181,19 +167,12 @@ void csr_csrrs(uint8_t rs1, uint8_t rd, uint16_t csr_number, uint8_t *intr) {
 void csr_csrrc(uint8_t rs1, uint8_t rd, uint16_t csr_number, uint8_t *intr) {
     uint8_t index = csr_get_index_by_number(csr_number);
     *intr = 0;
-    if (index == (uint8_t) -1) {
-        *intr = 1;
-        return;
-    }
+    if (index == (uint8_t) -1) { *intr = 1; return; }
     uint32_t prev_value = csr_read(index, intr);
-    if (unlikely(*intr)) {
-        return;
-    }
+    if (unlikely(*intr)) return;
     if (rs1) {
         csr_write(index, prev_value & (~mmu_register_read(rs1)), intr);
-        if (unlikely(*intr)) {
-            return;
-        }
+        if (unlikely(*intr)) return;
     }
     mmu_register_write(rd, prev_value);
 }
@@ -201,78 +180,70 @@ void csr_csrrc(uint8_t rs1, uint8_t rd, uint16_t csr_number, uint8_t *intr) {
 void csr_csrrwi(uint8_t uimm, uint8_t rd, uint16_t csr_number, uint8_t *intr) {
     uint8_t index = csr_get_index_by_number(csr_number);
     *intr = 0;
-    if (index == (uint8_t) -1) {
-        *intr = 1;
-        return;
-    }
+    if (index == (uint8_t) -1) { *intr = 1; return; }
     if (rd) {
         uint32_t prev_value = csr_read(index, intr);
-        if (unlikely(*intr)) {
-            return;
-        }
+        if (unlikely(*intr)) return;
         csr_write(index, uimm, intr);
-        if (unlikely(*intr)) {
-            return;
-        }
+        if (unlikely(*intr)) return;
         mmu_register_write(rd, prev_value);
     } else {
         csr_write(index, uimm, intr);
-        if (unlikely(*intr)) {
-            return;
-        }
+        if (unlikely(*intr)) return;
     }
 }
 
 void csr_csrrsi(uint8_t uimm, uint8_t rd, uint16_t csr_number, uint8_t *intr) {
     uint8_t index = csr_get_index_by_number(csr_number);
     *intr = 0;
-    if (index == (uint8_t) -1) {
-        *intr = 1;
-        return;
-    }
+    if (index == (uint8_t) -1) { *intr = 1; return; }
     uint32_t prev_value = csr_read(index, intr);
-    if (unlikely(*intr)) {
-        return;
-    }
+    if (unlikely(*intr)) return;
     mmu_register_write(rd, prev_value);
     if (uimm) {
         csr_write(index, prev_value | uimm, intr);
-        if (unlikely(*intr)) {
-            return;
-        }
+        if (unlikely(*intr)) return;
     }
 }
 
 void csr_csrrci(uint8_t uimm, uint8_t rd, uint16_t csr_number, uint8_t *intr) {
     uint8_t index = csr_get_index_by_number(csr_number);
     *intr = 0;
-    if (index == (uint8_t) -1) {
-        *intr = 1;
-        return;
-    }
+    if (index == (uint8_t) -1) { *intr = 1; return; }
     uint32_t prev_value = csr_read(index, intr);
-    if (unlikely(*intr)) {
-        return;
-    }
+    if (unlikely(*intr)) return;
     mmu_register_write(rd, prev_value);
     if (uimm) {
         csr_write(index, prev_value & (~uimm), intr);
-        if (unlikely(*intr)) {
-            return;
-        }
+        if (unlikely(*intr)) return;
     }
 }
 
 void zicnt_cycle_tick(void) {
     cycle++;
-
-    control_status_registers[CSR_idx_cycle] = cycle & 0xffffffff;
+    control_status_registers[CSR_idx_cycle]  = cycle & 0xffffffff;
     control_status_registers[CSR_idx_cycleh] = (cycle >> 32) & 0xffffffff;
 }
 
 void zicnt_time_tick(void) {
+#ifdef __EMSCRIPTEN__
+    /*
+     * On WASM, port_system_timer_get_ticks() delta between calls is often
+     * zero or wildly inaccurate because the host-clock conversion assumes a
+     * native OS scheduler.  Instead, derive emulated time directly from
+     * emulated cycles, which are guaranteed to increment every machine_step().
+     *
+     * ZICNT_TIMER_FREQ = 100_000_000 Hz (from parameters.h).
+     * We tick zicnt_time_tick every ZICNT_TICK_INTERVAL cycles (10_000).
+     * So each call advances time by ZICNT_TICK_INTERVAL timer ticks.
+     * That gives correct relative time regardless of wall-clock speed.
+     */
+    csr_time += ZICNT_TICK_INTERVAL;
+#else
     static port_clock_t last_clk = 0;
     csr_time += zicnt_csr_conv_host(port_system_timer_get_ticks() - last_clk);
+    last_clk = port_system_timer_get_ticks();
+#endif
 
     timecmp = (((uint64_t) control_status_registers[CSR_idx_stimecmph]) << 32) |
               control_status_registers[CSR_idx_stimecmp];
@@ -283,10 +254,8 @@ void zicnt_time_tick(void) {
         trap_clear_interrupt_pending(INTERRUPT_SUPERVISOR_TIMER);
     }
 
-    control_status_registers[CSR_idx_time] = csr_time & 0xffffffff;
+    control_status_registers[CSR_idx_time]  = csr_time & 0xffffffff;
     control_status_registers[CSR_idx_timeh] = (csr_time >> 32) & 0xffffffff;
-
-    last_clk = port_system_timer_get_ticks();
 }
 
 uint64_t zicnt_get_cycle(void) {

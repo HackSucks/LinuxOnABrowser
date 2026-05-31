@@ -50,7 +50,8 @@ void port_lock_lock(PORT_LOCK_T *lock, char is_write) {
     pthread_spin_lock(lock);
 }
 
-#elif defined(BARE_METAL_PLATFORM)
+// CHANGED HERE: Combined __EMSCRIPTEN__ with the bare metal no-op routine
+#elif defined(BARE_METAL_PLATFORM) || defined(__EMSCRIPTEN__)
 
 int port_lock_init(PORT_LOCK_T *lock) {
     return 0;
@@ -61,7 +62,5 @@ void port_lock_unlock(PORT_LOCK_T *lock) { }
 void port_lock_lock(PORT_LOCK_T *lock, char is_write) { }
 
 #else
-
 #error No support porting for lock in current platform.
-
 #endif

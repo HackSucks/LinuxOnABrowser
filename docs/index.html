@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
+    <title>LOAB :3</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            background: #0c0c0c;
+            overflow: hidden; 
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+
+        #disclaimer-toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 193, 7, 0.95);
+            color: #111;
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            z-index: 2000;
+            pointer-events: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            transition: opacity 1s ease-out;
+            text-align: center;
+            width: 90%;
+            max-width: 380px;
+        }
+
+        #terminal-wrap {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: #0a0a0a;
+            overflow: hidden;
+        }
+        
+        #terminal-container {
+            width: 100%;
+            height: 100%;
+            padding: 6px 5px 5px 5px;
+        }
+
+        .xterm .xterm-screen {
+            background: #0c0c0c;
+        }
+        
+        #canvas {
+            display: none;
+        }
+
+        #kb-hint {
+            display: none;
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #1a1a1e;
+            border-top: 1px solid #2c2c2c;
+            padding: 6px 12px calc(6px + env(safe-area-inset-bottom)) 12px;
+            gap: 8px;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            flex-wrap: wrap;
+            backdrop-filter: blur(8px);
+        }
+        
+        #kb-hint span {
+            color: #aaa;
+            font-size: 10px;
+        }
+        
+        #kb-hint button {
+            background: #2c2c2c;
+            border: none;
+            color: #e0e0e0;
+            font-family: inherit;
+            font-size: 11px;
+            padding: 6px 14px;
+            border-radius: 30px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: 0.05s linear;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        #kb-hint button:active {
+            background: #4a4a4a;
+            transform: scale(0.96);
+        }
+
+        @media (hover: none) and (pointer: coarse) {
+            #kb-hint {
+                display: flex;
+            }
+        }
+
+        ::selection {
+            background: #4caf5033;
+        }
+    </style>
+</head>
+<body>
+
+<div id="disclaimer-toast">⚠️ Booting OS... U-Boot may take a minute to load the kernel.</div>
+
+<div id="terminal-wrap">
+    <div id="terminal-container"></div>
+</div>
+
+<div id="kb-hint">
+    <span>⌨️</span>
+    <button id="btn-ctrl">CTRL</button>
+    <button id="btn-tab">TAB</button>
+    <button id="btn-esc">ESC</button>
+    <button id="btn-up">▲</button>
+    <button id="btn-down">▼</button>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<script>
+    (function() {
+        const termWrap = document.getElementById('terminal-wrap');
+        const termContainer = document.getElementById('terminal-container');
+        const kbHint = document.getElementById('kb-hint');
+        const toast = document.getElementById('disclaimer-toast');
+        
+        let ctrlPressed = false;
+        let baseFontSize = 13;
+        
+        const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+        if (isTouchDevice) baseFontSize = 15;
+        
+        const term = new Terminal({
+            cursorBlink: true,
+            cursorStyle: 'block',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+            fontSize: baseFontSize,
+            lineHeight: 1.45,
+            theme: {
+                background: '#0c0c0c',
+                foreground: '#dedede',
+                cursor: '#bada55',
+                cursorAccent: '#0c0c0c',
+                black: '#1e1e1e',
+                red: '#ff8a7a',
+                green: '#9eff80',
+                yellow: '#ffd966',
+                blue: '#6cb4ff',
+                magenta: '#d7a0ff',
+                cyan: '#6ed4ff',
+                white: '#eaeaea',
+                brightBlack: '#666',
+                brightRed: '#ff9e8c',
+                brightGreen: '#b3ffa0',
+                brightYellow: '#ffe084',
+                brightBlue: '#8cc9ff',
+                brightMagenta: '#e2b3ff',
+                brightCyan: '#8ee2ff',
+                brightWhite: '#f5f5f5',
+            },
+            scrollback: 8000,
+            allowTransparency: false,
+        });
+        
+        term.open(termContainer);
+        term.focus();
+
+        setTimeout(() => {
+            if (toast) toast.style.opacity = '0';
+        }, 10000);
+        
+        function resizeTerminalAndContainer() {
+            let visibleHeight = window.innerHeight;
+            if (window.visualViewport) {
+                visibleHeight = window.visualViewport.height;
+            }
+            
+            const isKbHintVisible = window.getComputedStyle(kbHint).display !== 'none';
+            const kbHintHeight = isKbHintVisible ? kbHint.offsetHeight : 0;
+            const newTermHeight = Math.max(120, visibleHeight - kbHintHeight);
+            
+            if (termWrap) {
+                termWrap.style.height = newTermHeight + 'px';
+            }
+
+            if (!term._core) return;
+            const containerRect = termContainer.getBoundingClientRect();
+            const cellWidth = term._core._renderService?.dimensions?.css?.cell?.width;
+            const cellHeight = term._core._renderService?.dimensions?.css?.cell?.height;
+            if (!cellWidth || !cellHeight) return;
+            
+            const cols = Math.max(24, Math.floor(containerRect.width / cellWidth));
+            const rows = Math.max(8, Math.floor(containerRect.height / cellHeight));
+            if (cols > 0 && rows > 0) {
+                term.resize(cols, rows);
+            }
+        }
+        
+        setTimeout(resizeTerminalAndContainer, 20);
+        
+        window.addEventListener('resize', () => {
+            setTimeout(resizeTerminalAndContainer, 30);
+        });
+        
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', () => {
+                resizeTerminalAndContainer();
+                setTimeout(resizeTerminalAndContainer, 100);
+            });
+            window.visualViewport.addEventListener('scroll', () => {
+                resizeTerminalAndContainer();
+            });
+        }
+        
+        window.addEventListener('orientationchange', () => {
+            setTimeout(resizeTerminalAndContainer, 50);
+        });
+        
+        window.uart8250_on_output = function(byte) {
+            if (typeof byte === 'number') {
+                term.write(String.fromCharCode(byte));
+            } else if (typeof byte === 'string') {
+                term.write(byte);
+            } else {
+                term.write(String(byte));
+            }
+        };
+        
+        function sendCharToUART(charCode) {
+            if (typeof Module !== 'undefined' && Module.ccall) {
+                Module.ccall('uart8250_wasm_push_char', null, ['number'], [charCode]);
+            }
+        }
+        
+        term.onData((data) => {
+            if (ctrlPressed && data.length > 0) {
+                ctrlPressed = false;
+                const btnCtrl = document.getElementById('btn-ctrl');
+                if (btnCtrl) {
+                    btnCtrl.style.background = '';
+                    btnCtrl.style.color = '';
+                    btnCtrl.style.border = '';
+                }
+                let firstCode = data.charCodeAt(0);
+                if (firstCode >= 97 && firstCode <= 122) {
+                    firstCode = firstCode - 96;
+                    sendCharToUART(firstCode);
+                } else if (firstCode >= 65 && firstCode <= 90) {
+                    firstCode = firstCode - 64;
+                    sendCharToUART(firstCode);
+                } else {
+                    sendCharToUART(firstCode);
+                }
+                return;
+            }
+            for (let i = 0; i < data.length; i++) {
+                sendCharToUART(data.charCodeAt(i));
+            }
+        });
+        
+        function sendKeySequence(seq) {
+            if (!Module || !Module.ccall) return;
+            for (let i = 0; i < seq.length; i++) {
+                Module.ccall('uart8250_wasm_push_char', null, ['number'], [seq.charCodeAt(i)]);
+            }
+            term.focus();
+        }
+        
+        const btnTab = document.getElementById('btn-tab');
+        const btnEsc = document.getElementById('btn-esc');
+        const btnUp = document.getElementById('btn-up');
+        const btnDown = document.getElementById('btn-down');
+        const btnCtrlMob = document.getElementById('btn-ctrl');
+        
+        if (btnTab) btnTab.addEventListener('click', () => sendKeySequence('\x09'));
+        if (btnEsc) btnEsc.addEventListener('click', () => sendKeySequence('\x1b'));
+        if (btnUp) btnUp.addEventListener('click', () => sendKeySequence('\x1b[A'));
+        if (btnDown) btnDown.addEventListener('click', () => sendKeySequence('\x1b[B'));
+        
+        if (btnCtrlMob) {
+            btnCtrlMob.addEventListener('click', (e) => {
+                e.preventDefault();
+                ctrlPressed = !ctrlPressed;
+                if (ctrlPressed) {
+                    btnCtrlMob.style.background = '#5f9e5f';
+                    btnCtrlMob.style.color = '#ffffff';
+                    btnCtrlMob.style.border = '1px solid #9bff9b';
+                } else {
+                    btnCtrlMob.style.background = '';
+                    btnCtrlMob.style.color = '';
+                    btnCtrlMob.style.border = '';
+                }
+                term.focus();
+            });
+        }
+        
+        const focusTerminal = (e) => {
+            if (kbHint.contains(e.target)) return;
+            term.focus();
+        };
+        
+        termWrap.addEventListener('click', focusTerminal);
+        termWrap.addEventListener('touchend', (e) => {
+            setTimeout(() => term.focus(), 50);
+        });
+        
+        window.Module = {
+            arguments: [
+                '--addr=0x81fa0000',
+                '--exec=linux/fw_jump.bin',
+                '--with=0x80000000#linux/u-boot.bin',
+                '--with=0x81ffd800#linux/u-boot.dtb',
+                '--with=0x81000000#linux/uImage.flat'
+            ],
+            print: function(text) {
+                if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+                term.write(text + '\r\n');
+            },
+            printErr: function(text) {
+                if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
+                term.write('\x1b[38;2;255;120;120m' + text + '\x1b[0m\r\n');
+            },
+            canvas: document.getElementById('canvas'),
+            setStatus: function(text) {},
+            totalDependencies: 0,
+            monitorRunDependencies: function(left) {},
+            onRuntimeInitialized: function() {
+                console.log('[temu] online');
+                setTimeout(resizeTerminalAndContainer, 80);
+            },
+            preRun: [],
+            postRun: []
+        };
+        
+        window.onerror = function(msg, url, line) {
+            console.error("frontend error:", msg, url, line);
+            return false;
+        };
+        
+        setTimeout(resizeTerminalAndContainer, 200);
+        setTimeout(resizeTerminalAndContainer, 600);
+    })();
+</script>
+
+<script src="index.js"></script>
+</body>
+</html>

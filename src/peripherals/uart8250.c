@@ -7,6 +7,25 @@
 #include "uart8250.h"
 #include "plic-simple.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+
+/*
+ * Per-byte output callback into JS.
+ * xterm.js receives each byte the moment the UART TX FIFO drains it,
+ * so typed characters echo immediately without waiting for a newline.
+ *
+ * In JS (index.html) define:
+ *   window.uart8250_on_output = (byte) => term.write(String.fromCharCode(byte));
+ */
+EM_JS(void, uart8250_js_write_byte, (uint8_t ch), {
+    if (typeof window !== 'undefined' && window.uart8250_on_output) {
+        window.uart8250_on_output(ch);
+    }
+});
+
+#endif
+
 #define FCR_INT_TRIGGER_LEVEL           (FCR >> 6)
 #define LOOPBACK_MODE_ON                (MCR & (1 << 4))
 #define INT_READ_DATA_AVAILABLE          0
@@ -57,7 +76,6 @@ uint8_t rx_fifo_tail = 0;
 PORT_LOCK_T rx_fifo_lock;
 
 static void throw_interrupt(uint8_t cause);
-
 static void clear_interrupt(uint8_t cause);
 
 static void write_rx_fifo(uint8_t data) {
@@ -72,7 +90,6 @@ static uint8_t read_from_rx_fifo(void) {
     port_lock_lock(&rx_fifo_lock, 1);
     uint8_t head = rx_fifo[0];
     if (rx_fifo_tail) {
-        /* 移位 */
         for (int i = 0; i < UART_FIFO_SIZE - 1; i++) {
             rx_fifo[i] = rx_fifo[i + 1];
         }
@@ -91,20 +108,17 @@ static uint8_t read_from_rx_fifo(void) {
 }
 
 static void clear_rx_fifo(void) {
-    /* TODO: But it doesn’t clear the shift register, i.e. receiving of the current character continues. */
     port_lock_lock(&rx_fifo_lock, 1);
     rx_fifo_tail = 0;
     port_lock_unlock(&rx_fifo_lock);
 }
 
 static void clear_tx_fifo(void) {
-    /* TODO: The shift register is not cleared, i.e. transmitting of the current character continues. */
     tx_fifo_tail = 0;
 }
 
 static void throw_interrupt(uint8_t cause) {
     if (!(IIR & 0x01)) {
-        /* Is pending, check the priority */
         if (current_pending_int != 0xff) {
             if (INT_PRIOR[cause] > INT_PRIOR[current_pending_int]) {
                 return;
@@ -112,7 +126,6 @@ static void throw_interrupt(uint8_t cause) {
         }
     }
     if (!(IER & (1 << cause))) {
-        /* Disabled interrupt */
         return;
     }
     IIR |= (IIR_VALUE[cause] << 1);
@@ -133,23 +146,17 @@ uint8_t uart8250_read_b(uint8_t offset) {
     uint8_t scratch;
     switch (offset) {
         case 0:
-            if (LCR >> 7) {
-                return divisor & 0x00ff;
-            }
+            if (LCR >> 7) return divisor & 0x00ff;
             return read_from_rx_fifo();
         case 1:
-            if (LCR >> 7) {
-                return (divisor >> 8) & 0x00ff;
-            }
+            if (LCR >> 7) return (divisor >> 8) & 0x00ff;
             return IER;
         case 2:
             scratch = IIR;
             clear_interrupt(INT_TRANSMIT_HOLDING_EMPTY);
             return scratch;
-        case 3:
-            return LCR;
-        case 4:
-            return MCR;
+        case 3: return LCR;
+        case 4: return MCR;
         case 5:
             scratch = LSR;
             port_lock_lock(&rx_fifo_lock, 0);
@@ -157,11 +164,8 @@ uint8_t uart8250_read_b(uint8_t offset) {
             port_lock_unlock(&rx_fifo_lock);
             clear_interrupt(INT_RECEIVER_LINE_STATUS);
             return scratch;
-        case 6:
-            return MSR;
-        default:
-            /* exception */
-            return 0;
+        case 6: return MSR;
+        default: return 0;
     }
 }
 
@@ -174,7 +178,6 @@ void uart8250_write_b(uint8_t offset, uint8_t data) {
             } else {
                 if (tx_fifo_tail < UART_FIFO_SIZE) {
                     tx_fifo[tx_fifo_tail++] = data;
-                    /* 1 << 5: Transmit FIFO empty */
                     port_lock_lock(&rx_fifo_lock, 0);
                     LSR &= ~(1 << 5);
                     LSR &= ~(1 << 6);
@@ -193,71 +196,82 @@ void uart8250_write_b(uint8_t offset, uint8_t data) {
             break;
         case 2:
             FCR = data;
-            if (FCR & (1 << 1)) {
-                clear_rx_fifo();
-            }
-            if (FCR & (1 << 2)) {
-                clear_tx_fifo();
-            }
+            if (FCR & (1 << 1)) clear_rx_fifo();
+            if (FCR & (1 << 2)) clear_tx_fifo();
             break;
-        case 3:
-            LCR = data;
-            break;
+        case 3: LCR = data; break;
         case 4:
             MCR = data;
             if (LOOPBACK_MODE_ON) {
-                /* Out2 */
-                if (MCR & (1 << 3)) {
-                    MSR |= 0x80;
-                } else {
-                    MSR &= ~0x80;
-                }
-                /* Out1 */
-                if (MCR & (1 << 2)) {
-                    MSR |= 0x40;
-                } else {
-                    MSR &= ~0x40;
-                }
-                /* RTS */
-                if (MCR & (1 << 1)) {
-                    MSR |= 0x10;
-                } else {
-                    MSR &= ~0x10;
-                }
-                /* DTR */
-                if (MCR & (1 << 0)) {
-                    MSR |= 0x20;
-                } else {
-                    MSR &= ~0x20;
-                }
+                if (MCR & (1 << 3)) MSR |= 0x80; else MSR &= ~0x80;
+                if (MCR & (1 << 2)) MSR |= 0x40; else MSR &= ~0x40;
+                if (MCR & (1 << 1)) MSR |= 0x10; else MSR &= ~0x10;
+                if (MCR & (1 << 0)) MSR |= 0x20; else MSR &= ~0x20;
             } else {
                 MSR &= ~0xc0;
             }
             break;
-        default:
-            /* exception */
-            break;
+        default: break;
     }
 }
 
 void uart8250_tick(void) {
+#ifdef __EMSCRIPTEN__
+    /*
+     * On WASM there is no baud-rate clock — just flush every TX byte
+     * immediately via the JS per-byte callback so xterm sees each
+     * character as soon as the kernel writes it (including echoed input).
+     */
+
+    /* --- TX: flush all pending bytes immediately --- */
+    while (tx_fifo_tail) {
+        uint8_t ch = tx_fifo[0];
+        if (LOOPBACK_MODE_ON) {
+            write_rx_fifo(ch);
+        } else {
+            /* Per-byte JS callback — xterm renders it immediately */
+            uart8250_js_write_byte(ch);
+        }
+        for (int i = 0; i < UART_FIFO_SIZE - 1; i++) {
+            tx_fifo[i] = tx_fifo[i + 1];
+        }
+        tx_fifo_tail--;
+    }
+    /* Mark TX FIFO empty */
+    port_lock_lock(&rx_fifo_lock, 0);
+    LSR |= (1 << 5) | (1 << 6);
+    throw_interrupt(INT_TRANSMIT_HOLDING_EMPTY);
+    port_lock_unlock(&rx_fifo_lock);
+
+    /* --- RX: poll for keyboard input --- */
+    {
+        int ch = port_console_read();
+        if (ch >= 0) {
+            port_lock_lock(&rx_fifo_lock, 1);
+            if (rx_fifo_tail < UART_FIFO_SIZE - 1) {
+                rx_fifo[rx_fifo_tail++] = (uint8_t)ch;
+                LSR |= 1;
+                throw_interrupt(INT_READ_DATA_AVAILABLE);
+            }
+            port_lock_unlock(&rx_fifo_lock);
+        }
+    }
+
+#else
+    /* --- native: original divisor-throttled path --- */
     if (div_cnt >= divisor) {
         div_cnt = 0;
         if (tx_fifo_tail) {
-            /* 发送当前的队首 */
             if (LOOPBACK_MODE_ON) {
                 write_rx_fifo(tx_fifo[0]);
             } else {
                 port_console_write(tx_fifo[0]);
             }
-            /* 移位 */
             for (int i = 0; i < UART_FIFO_SIZE - 1; i++) {
                 tx_fifo[i] = tx_fifo[i + 1];
             }
-            /* 指针移位 */
             tx_fifo_tail--;
             if (tx_fifo_tail == 0) {
-                /* 1 << 6: Transmitter empty */
                 port_lock_lock(&rx_fifo_lock, 0);
                 LSR |= (1 << 6);
                 port_console_flush();
@@ -265,7 +279,6 @@ void uart8250_tick(void) {
             }
         }
         if (!tx_fifo_tail) {
-            /* 1 << 5: Transmit FIFO empty */
             port_lock_lock(&rx_fifo_lock, 0);
             LSR |= (1 << 5);
             throw_interrupt(INT_TRANSMIT_HOLDING_EMPTY);
@@ -274,25 +287,27 @@ void uart8250_tick(void) {
     } else {
         div_cnt++;
     }
+#endif
 }
 
 int uart8250_init(void) {
+#ifndef __EMSCRIPTEN__
 #ifndef BARE_METAL_PLATFORM
     pthread_t listening_thd;
-
     port_lock_init(&rx_fifo_lock);
-
     if (pthread_create(&listening_thd, NULL, uart8250_listening, NULL)) {
         return -1;
     }
 #endif
+#else
+    port_lock_init(&rx_fifo_lock);
+#endif
     return 0;
 }
 
+#ifndef __EMSCRIPTEN__
 #if defined(WIN32) || defined(WIN64)
-
 #include <windows.h>
-
 #endif
 
 _Noreturn void *uart8250_listening(void *ptr) {
@@ -300,7 +315,6 @@ _Noreturn void *uart8250_listening(void *ptr) {
         int ch = port_console_read();
         port_lock_lock(&rx_fifo_lock, 1);
         if (rx_fifo_tail >= UART_FIFO_SIZE - 1) {
-            /* FIFO is full */
             LSR |= 1 << 1;
             throw_interrupt(INT_RECEIVER_LINE_STATUS);
         } else {
@@ -315,3 +329,4 @@ _Noreturn void *uart8250_listening(void *ptr) {
         port_lock_unlock(&rx_fifo_lock);
     }
 }
+#endif

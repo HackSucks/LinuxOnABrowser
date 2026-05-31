@@ -8,7 +8,7 @@
 //#define BARE_METAL_PLATFORM
 
 #define RAM_BASE_ADDR               0x80000000
-#define RAM_SIZE                    0x02000000
+#define RAM_SIZE                    0x08000000
 
 #define UART_BASE_ADDR              0x12500000
 #define UART_SIZE                   0x00000100
