@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # TEMU: Temu is not qEMU
 
 `T`绝对与清华大学没有任何关系。本命名为致敬`QEMU`用。
@@ -553,3 +554,7 @@ Inspiration, code snippets, etc.
 * [dbader](https://github.com/dbader/readme-template)
 * [zenorocha](https://gist.github.com/zenorocha/4526327)
 * [fvcproductions](https://gist.github.com/fvcproductions/1bfc2d4aecb01a834b46)
+=======
+# LinuxOnABrowser
+a port of the temu RISC-V educational emulator to WebAssembly.
+>>>>>>> af3a8940cb34df2594704f7c6381209faa948a4a
